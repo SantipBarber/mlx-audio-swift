@@ -274,6 +274,15 @@ public final class Qwen3TTSModel: Module, SpeechGenerationModel, @unchecked Send
         return concatenated([codecBosEmbed, refCodecEmbed], axis: 1)
     }
 
+    /// Content key of a reference's speech codes ([1, codebooks, time]): the same voice gives the same key
+    /// even when the caller passes a new reference array each time.
+    static func referenceKey(_ refCodes: MLXArray) -> Int {
+        var hasher = Hasher()
+        hasher.combine(refCodes.shape)
+        hasher.combine(refCodes.asType(.int32).asArray(Int32.self))
+        return hasher.finalize()
+    }
+
     private func referenceAudioContext(for refAudio: MaterializedArray) -> ReferenceAudioContext {
         guard let speechTokenizer, let talkerConfig = config.talkerConfig else {
             fatalError("Speech tokenizer/config not loaded")
@@ -406,15 +415,22 @@ public final class Qwen3TTSModel: Module, SpeechGenerationModel, @unchecked Send
         let eosTokenArray = MLXArray([Int32(eosTokenId)]).reshaped(1, 1)
         let codeCache = talker.codePredictor.makeCache()
 
-        if onAudioChunk != nil {
-            speechTokenizer.decoder.resetStreamingState()
-            if let refCodes {
-                speechTokenizer.decoder.primeStreamingState(referenceCodes: refCodes)
-            }
+        // Priming decodes ~2 s of reference audio, so it is done ahead: at the end of each streamed sentence,
+        // for the next one with the same reference. A sentence only primes up front when that did not happen.
+        let decoder = speechTokenizer.decoder
+        let primeKey = refCodes.map(Self.referenceKey)
+        func resetAndPrime() {
+            decoder.resetStreamingState()
+            guard let refCodes, let primeKey else { return }
+            decoder.primeStreamingState(referenceCodes: refCodes)
+            decoder.primedReferenceKey = primeKey
+        }
+        if onAudioChunk != nil, primeKey == nil || decoder.primedReferenceKey != primeKey {
+            resetAndPrime()
         }
         defer {
             if onAudioChunk != nil {
-                speechTokenizer.decoder.resetStreamingState()
+                resetAndPrime()
             }
         }
 

@@ -891,6 +891,8 @@ final class Qwen3TTSSpeechTokenizerDecoder: Module {
     let config: Qwen3TTSTokenizerDecoderConfig
     let totalUpsample: Int
     var transformerCache: [any KVCache]?
+    /// Reference whose codes the streaming state was primed with (nil after a reset).
+    var primedReferenceKey: Int?
 
     @ModuleInfo(key: "pre_transformer") var preTransformer: DecoderTransformer
     @ModuleInfo var quantizer: SplitResidualVectorQuantizer
@@ -949,6 +951,7 @@ final class Qwen3TTSSpeechTokenizerDecoder: Module {
 
     func resetStreamingState() {
         transformerCache = nil
+        primedReferenceKey = nil
         preConv.resetState()
         for layer in upsample {
             layer.resetState()
